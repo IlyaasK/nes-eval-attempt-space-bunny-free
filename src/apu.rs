@@ -30,31 +30,31 @@ const STEP_CPU: [u16; 4] = [7456, 7456, 7458, 7458];
 const STEP_CPU_5: [u16; 5] = [7456, 7456, 7458, 7458, 7452];
 
 #[derive(Clone, Copy, Default)]
-struct Envelope {
-    start: bool,
-    divider: u8,
-    decay: u8,
+pub struct Envelope {
+    pub start: bool,
+    pub divider: u8,
+    pub decay: u8,
 }
 
 #[derive(Clone, Copy)]
 pub struct Pulse {
     pub enabled: bool,
     pub duty: u8,
-    seq: u8,
+    pub seq: u8,
     pub timer: u16,
     pub period: u16,
     pub length: u8,
     halt: bool,
     pub const_vol: bool,
     pub volume: u8,
-    env: Envelope,
+    pub env: Envelope,
     sweep_enabled: bool,
     sweep_period: u8,
     sweep_negate: bool,
     sweep_shift: u8,
     sweep_reload: bool,
     sweep_divider: u8,
-    sweep_silence: bool,
+    pub sweep_silence: bool,
     sweep_mute: bool,
 }
 
@@ -148,7 +148,7 @@ impl Pulse {
         self.sweep_silence = t > 0x7FF || (self.period < 8 && self.sweep_negate);
     }
     #[inline]
-    fn output(&self) -> f64 {
+    pub fn output(&self) -> f64 {
         if self.length == 0 || self.sweep_silence {
             return 0.0;
         }
@@ -173,7 +173,7 @@ pub struct Triangle {
     halt: bool,
     linear: u8,
     linear_reload: u8,
-    lin_counter: u8,
+    pub lin_counter: u8,
 }
 
 impl Triangle {
@@ -207,7 +207,7 @@ impl Triangle {
         }
     }
     #[inline]
-    fn output(&self) -> f64 {
+    pub fn output(&self) -> f64 {
         if self.length > 0 && self.lin_counter > 0 {
             TRIANGLE_TABLE[self.seq as usize] as f64
         } else {
@@ -227,7 +227,7 @@ pub struct Noise {
     halt: bool,
     pub const_vol: bool,
     pub volume: u8,
-    env: Envelope,
+    pub env: Envelope,
 }
 
 impl Noise {
@@ -271,7 +271,7 @@ impl Noise {
         }
     }
     #[inline]
-    fn output(&self) -> f64 {
+    pub fn output(&self) -> f64 {
         if self.length == 0 || (self.shift & 1) != 0 {
             return 0.0;
         }
@@ -371,8 +371,8 @@ impl Apu {
             res_acc: 0.0,
             hp_prev: 0.0,
             hp_lp: 0.0,
-            hp_coeff: 0.0,
-            out_scale: 1.0,
+            hp_coeff: 0.996,
+            out_scale: 16000.0,
             raw_last: 0.0,
         }
     }

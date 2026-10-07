@@ -259,6 +259,17 @@ impl Nes {
     #[inline]
     fn audio_tick(&mut self) {
         let raw = self.apu.mixer();
+        if self.apu.hp_coeff < 0.0 {
+            self.res_acc += SAMPLE_RATE / CPU_CLOCK;
+            if self.res_acc >= 1.0 {
+                self.res_acc -= 1.0;
+                let v = (raw * self.apu.out_scale) as i32;
+                let v = v.clamp(-32768, 32767);
+                self.audio.push(v as i16);
+                self.audio_all.push(v as i16);
+            }
+            return;
+        }
         // high pass filter
         let c = self.apu.hp_coeff;
         let y = raw - self.hp_prev + c * self.hp_lp;

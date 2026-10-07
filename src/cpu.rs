@@ -151,6 +151,7 @@ impl Nes {
     }
 
     pub fn step(&mut self) {
+        self.ppu.last_pc = self.pc;
         if self.dma_pending {
             self.do_dma();
             return;

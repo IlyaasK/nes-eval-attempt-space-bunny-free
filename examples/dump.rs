@@ -31,9 +31,12 @@ fn main() {
     std::fs::create_dir_all(outdir).unwrap();
 
     let mut n = Nes::new();
-    if let Ok(v) = env::var("SCALE") { n.apu.out_scale = v.parse().unwrap(); }
-    if env::var("APUD").is_ok() { n.ppu.trace2 = false; }
-    if let Ok(v) = env::var("HP") { n.apu.hp_coeff = v.parse().unwrap(); }
+    if let Ok(v) = env::var("SCALE") {
+        n.apu.out_scale = v.parse().unwrap();
+    }
+    if let Ok(v) = env::var("HP") {
+        n.apu.hp_coeff = v.parse().unwrap();
+    }
     if !n.load_rom(&data) {
         eprintln!("load failed");
         std::process::exit(1);
@@ -44,6 +47,8 @@ fn main() {
     let first_trace = env::var("TRACEFROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
     let dump_ppu = env::var("PAL").is_ok();
     let dump_pram = env::var("PRAM").is_ok();
+    let apu_dbg = env::var("APUD").is_ok();
+    let trace_sl: u16 = env::var("SL").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
 
     for f in 0..frames {
         while si < script.len() && script[si].0 == f {
@@ -53,14 +58,35 @@ fn main() {
         n.keys = keys;
         n.trace = tracing && f >= first_trace;
         n.ppu.trace2 = n.trace;
-        n.ppu.trace_sl = env::var("SL").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
+        n.ppu.trace_sl = trace_sl;
         n.run_frame();
-        if env::var("APUD").is_ok() {
-            eprintln!("f{} mixer={:.4} p0len={} p0per={} p0vol={} p0duty={} p1len={} trlen={} nzlen={} dmcout={}",
-                f, n.apu.mixer(), n.apu.pulse[0].length, n.apu.pulse[0].period, n.apu.pulse[0].volume, n.apu.pulse[0].duty, n.apu.pulse[1].length, n.apu.triangle.length, n.apu.noise.length, 0);
-        }
         n.trace = false;
         n.ppu.trace2 = false;
+
+        if apu_dbg {
+            let a = &n.apu;
+            eprintln!(
+                "f{} mixer={:.4} p0o={:.1} p1o={:.1} tro={:.1} nzo={:.1} | p0 len={} per={} duty={} vol={} cvol={} seq={} dec={} sil={} | p1 len={} | tri len={} lc={} | nz len={}",
+                f,
+                a.mixer(),
+                a.pulse[0].output(),
+                a.pulse[1].output(),
+                a.triangle.output(),
+                a.noise.output(),
+                a.pulse[0].length,
+                a.pulse[0].period,
+                a.pulse[0].duty,
+                a.pulse[0].volume,
+                a.pulse[0].const_vol,
+                a.pulse[0].seq,
+                a.pulse[0].env.decay,
+                a.pulse[0].sweep_silence,
+                a.pulse[1].length,
+                a.triangle.length,
+                a.triangle.lin_counter,
+                a.noise.length
+            );
+        }
 
         if f >= start_frame {
             let fb = &n.ppu.framebuffer;
@@ -73,44 +99,28 @@ fn main() {
 
         if f + 1 == frames {
             if dump_ppu {
-                let nz: Vec<usize> = (0..n.chr.len()).filter(|k| n.chr[*k] != 0).collect();
-                let mut rs: Vec<(usize, usize)> = Vec::new();
-                for k in nz.iter() {
-                    if let Some(l) = rs.last_mut() {
-                        if l.1 + 1 == *k {
-                            l.1 = *k;
-                            continue;
-                        }
-                    }
-                    rs.push((*k, *k));
-                }
-                let nt_nz: Vec<usize> = (0..2048).filter(|k| n.ppu.vram[*k] != 0).collect();
-                let mut rs2: Vec<(usize, usize)> = Vec::new();
-                for k in nt_nz.iter() {
-                    if let Some(l) = rs2.last_mut() {
-                        if l.1 + 1 == *k {
-                            l.1 = *k;
-                            continue;
-                        }
-                    }
-                    rs2.push((*k, *k));
-                }
+                let a = &n.apu;
                 eprintln!(
-                    "mask={:02X} ctrl={:02X} pal={:02X?} chr20={:02X?} banks={:02X?} ptrnull={}",
-                    n.ppu.mask,
-                    n.ppu.ctrl,
-                    n.ppu.palette,
-                    (0..16).map(|k| n.ppu.chr_read(0x200 + k as u16)).collect::<Vec<_>>(),
-                    n.ppu.chr_banks,
-                    n.ppu.chr_writable.is_null()
+                    "mask={:02X} ctrl={:02X} pal={:02X?}",
+                    n.ppu.mask, n.ppu.ctrl, n.ppu.palette
                 );
-                eprintln!("CHRnz ranges: {:?} ptr_w={:x} chr={:x} len={} first={:02X?}", &rs[..rs.len().min(40)], n.ppu.chr_writable as usize, n.chr.as_ptr() as usize, n.chr.len(), &n.chr[..16]);
-                eprintln!("VRAMnz ranges: {:?}", &rs2[..rs2.len().min(20)]);
+                for t in 0..24u16 {
+                    let off = t as usize * 16;
+                    eprintln!(
+                        "tile {:02X}: {:02X?} | {:02X?}",
+                        t,
+                        &n.chr[off..off + 8],
+                        &n.chr[off + 8..off + 16]
+                    );
+                }
                 for r in 0..30u16 {
-                    eprintln!("nt row {}: {:?}", r, (0..32).map(|c| n.ppu.vram[(r * 32 + c) as usize]).collect::<Vec<_>>());
+                    eprintln!(
+                        "nt row {}: {:?}",
+                        r,
+                        (0..32).map(|c| n.ppu.vram[(r * 32 + c) as usize]).collect::<Vec<_>>()
+                    );
                 }
                 eprintln!("attr: {:?}", &n.ppu.vram[0x3C0..0x3D0]);
-                for a in [0x530u16,0x410,0x220] { eprintln!("chr {:04X}: {:02X?}", a, (0..16).map(|k| n.chr[(a as usize)+k]).collect::<Vec<_>>()); }
             }
             if dump_pram {
                 let pr = &n.mapper.prg_ram;
@@ -130,8 +140,8 @@ fn main() {
                 }
                 eprintln!("PRAM:\n{}", s);
             }
-            let mut wav = Vec::new();
             let all: Vec<i16> = n.audio_all.clone();
+            let mut wav = Vec::new();
             wav.extend_from_slice(b"RIFF");
             let nsamp = all.len() as u32 * 2;
             wav.extend_from_slice(&(36 + nsamp).to_le_bytes());
@@ -153,12 +163,7 @@ fn main() {
         if tracing {
             eprintln!(
                 "frame {} samples={} sl={} dot={} pc={:04X} warm={}",
-                f,
-                n.audio.len(),
-                n.ppu.scanline,
-                n.ppu.dot,
-                n.pc,
-                n.ppu.warmup
+                f, n.audio.len(), n.ppu.scanline, n.ppu.dot, n.pc, n.ppu.warmup
             );
         }
     }

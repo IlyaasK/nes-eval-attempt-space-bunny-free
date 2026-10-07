@@ -34,7 +34,12 @@ pub struct Ppu {
     bg_lo_latch: u8,
     bg_hi_latch: u8,
     at_bits: u8,
-    bank: [[u8; 3]; 2], // (at_bits, lo, hi)
+    sh_lo: u16,
+    sh_hi: u16,
+    sh_at: u16,
+    pend_lo: u8,
+    pend_hi: u8,
+    pend_at: u8,
 
     // sprite pipeline
     pub sprite_count: usize,
@@ -53,6 +58,7 @@ pub struct Ppu {
     pub warmup: i64,
     pub trace2: bool,
     pub trace_sl: u16,
+    pub last_pc: u16,
     pub chr_banks: [u8; 8],
     pub nt_bank: u8,
     pub chr_ptr: *const u8,
@@ -94,7 +100,12 @@ impl Ppu {
             bg_lo_latch: 0,
             bg_hi_latch: 0,
             at_bits: 0,
-            bank: [[0; 3]; 2],
+            sh_lo: 0,
+            sh_hi: 0,
+            sh_at: 0,
+            pend_lo: 0,
+            pend_hi: 0,
+            pend_at: 0,
             sprite_count: 0,
             sp_lo: [0; 8],
             sp_hi: [0; 8],
@@ -109,6 +120,7 @@ impl Ppu {
             warmup: 29658,
             trace2: false,
             trace_sl: 0,
+            last_pc: 0,
             chr_banks: [0; 8],
             nt_bank: 0,
             chr_ptr: core::ptr::null(),
@@ -296,6 +308,7 @@ impl Ppu {
                 }
             }
             0x05 => {
+                if self.trace2 { println!("W2005 w={} v={:02X} t={:04X} v={:04X}", self.write_toggle as u8, val, self.t, self.v); }
                 if !self.write_toggle {
                     self.t = (self.t & 0x7FE0) | ((val >> 3) as u16);
                     self.fine_x = val & 7;
@@ -308,6 +321,7 @@ impl Ppu {
                 self.write_toggle = !self.write_toggle;
             }
             0x06 => {
+                if self.trace2 { println!("W2006 w={} v={:02X} t={:04X} v={:04X}", self.write_toggle as u8, val, self.t, self.v); }
                 if !self.write_toggle {
                     self.t = (self.t & 0x00FF) | ((val as u16 & 0x3F) << 8);
                 } else {
@@ -318,7 +332,7 @@ impl Ppu {
             }
             0x07 => {
                 let addr = self.v & 0x3FFF;
-                if self.trace2 { println!("W2007 v={:04X} <- {:02X} ctrl={:02X} mask={:02X} w={}", addr, val, self.ctrl, self.mask, self.write_toggle as u8); }
+                if self.trace2 { println!("W2007 v={:04X} <- {:02X} ctrl={:02X} mask={:02X} w={} pc={:04X} sl={} dot={}", addr, val, self.ctrl, self.mask, self.write_toggle as u8, self.last_pc, self.scanline, self.dot); }
                 self.ppu_write(addr, val);
                 self.increment_v();
             }
@@ -409,6 +423,16 @@ impl Ppu {
         }
 
         if rendering {
+            if (dot >= 2 && dot <= 257) || (dot >= 321 && dot <= 337) {
+                self.sh_lo <<= 1;
+                self.sh_hi <<= 1;
+                self.sh_at <<= 1;
+            }
+            if dot % 8 == 1 {
+                self.sh_lo = (self.sh_lo & 0x00FF) | ((self.pend_lo as u16) << 8);
+                self.sh_hi = (self.sh_hi & 0x00FF) | ((self.pend_hi as u16) << 8);
+                self.sh_at = (self.sh_at & 0x00FF) | ((self.pend_at as u16) << 8);
+            }
             // ---- background fetch pipeline ----
             match dot % 8 {
                 1 => {
@@ -432,12 +456,14 @@ impl Ppu {
                         println!("S{} d{} v={:04X} nt={:02X} addr={:04X} lo={:02X} k={} kk={} finex={}", sl, dot, self.v, self.nt_byte, addr, self.bg_lo_latch, ((dc/8)&1), (((dc.wrapping_sub(8))/8)&1), self.fine_x);
                     }
                     self.bg_hi_latch = self.ppu_read((addr + 8) & 0x3FFF);
-                    let k = ((dc / 8) & 1) as usize;
-                    self.bank[k] = [self.at_bits, self.bg_lo_latch, self.bg_hi_latch];
+                    self.pend_lo = self.bg_lo_latch;
+                    self.pend_hi = self.bg_hi_latch;
+                    let sel = ((self.v >> 1) & 1) as usize;
+                    self.pend_at = if ((self.at_bits >> sel) & 1) != 0 { 0xFF } else { 0x00 };
                 }
                 _ => {}
             }
-            if dot % 8 == 0 {
+            if (dot >= 8 && dot <= 256 && dot % 8 == 0) || dot == 328 || dot == 336 {
                 self.inc_x();
             }
             if dot == 256 {
@@ -517,14 +543,10 @@ impl Ppu {
         let mut bg_pal: u8 = 0;
         let mut bg_ok = false;
         if rendering && show_bg && x_vis {
-            let k = ((dc.wrapping_sub(8)) / 8) as usize & 1;
-            let b = self.bank[k];
-            let fine = self.fine_x as u16;
-            let bit = (15 - fine) as u8;
-            let lo = (b[1] >> (bit & 7)) & 1;
-            let hi = (b[2] >> (bit & 7)) & 1;
-            let attr_sel = ((x >> 3) & 1) as u8;
-            let at = (b[0] >> attr_sel) & 1;
+            let bit = ((x & 7) + self.fine_x as u16) & 15;
+            let lo = ((self.sh_lo >> bit) & 1) as u8;
+            let hi = ((self.sh_hi >> bit) & 1) as u8;
+            let at = ((self.sh_at >> bit) & 1) as u8;
             let color = lo | (hi << 1);
             if color != 0 {
                 bg_pal = (self.ctrl & 3) * 4 + at * 4;
