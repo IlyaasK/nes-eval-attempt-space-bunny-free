@@ -39,6 +39,9 @@ fn main() {
     let mut keys = 0u32;
     let tracing = env::var("TRACE").is_ok();
     let first_trace = env::var("TRACEFROM").ok().and_then(|v| v.parse().ok()).unwrap_or(0);
+    let dump_ppu = env::var("PAL").is_ok();
+    let dump_pram = env::var("PRAM").is_ok();
+
     for f in 0..frames {
         while si < script.len() && script[si].0 == f {
             keys = script[si].1;
@@ -49,7 +52,8 @@ fn main() {
         n.ppu.trace2 = n.trace;
         n.run_frame();
         n.trace = false;
-        n.ppu.trace2 = n.trace;
+        n.ppu.trace2 = false;
+
         if f >= start_frame {
             let fb = &n.ppu.framebuffer;
             let mut bytes = Vec::with_capacity(122880);
@@ -58,10 +62,66 @@ fn main() {
             }
             std::fs::write(format!("{}/frame_{:05}.idx", outdir, f), &bytes).unwrap();
         }
-        if env::var("PAL").is_ok() && f + 1 == frames {
-            eprintln!("mask={:02X} ctrl={:02X} pal={:02X?} nt0={:02X?} attr={:02X?} chr0={:02X?} chr20={:02X?} banks={:02X?} chr0reg={:02X} m1ctrl={:02X}", n.ppu.mask, n.ppu.ctrl, n.ppu.palette, &n.ppu.vram[..8], (0..8).map(|i| n.ppu.chr_read((i*0x200+0x20) as u16)).collect::<Vec<_>>(), n.ppu.chr_banks, n.mapper.chr0, n.mapper.ctrl);
-        }
+
         if f + 1 == frames {
+            if dump_ppu {
+                let nz: Vec<usize> = (0..n.chr.len()).filter(|k| n.chr[*k] != 0).collect();
+                let mut rs: Vec<(usize, usize)> = Vec::new();
+                for k in nz.iter() {
+                    if let Some(l) = rs.last_mut() {
+                        if l.1 + 1 == *k {
+                            l.1 = *k;
+                            continue;
+                        }
+                    }
+                    rs.push((*k, *k));
+                }
+                let nt_nz: Vec<usize> = (0..2048).filter(|k| n.ppu.vram[*k] != 0).collect();
+                let mut rs2: Vec<(usize, usize)> = Vec::new();
+                for k in nt_nz.iter() {
+                    if let Some(l) = rs2.last_mut() {
+                        if l.1 + 1 == *k {
+                            l.1 = *k;
+                            continue;
+                        }
+                    }
+                    rs2.push((*k, *k));
+                }
+                eprintln!(
+                    "mask={:02X} ctrl={:02X} pal={:02X?} chr20={:02X?} banks={:02X?} ptrnull={}",
+                    n.ppu.mask,
+                    n.ppu.ctrl,
+                    n.ppu.palette,
+                    (0..16).map(|k| n.ppu.chr_read(0x200 + k as u16)).collect::<Vec<_>>(),
+                    n.ppu.chr_banks,
+                    n.ppu.chr_writable.is_null()
+                );
+                eprintln!("CHRnz ranges: {:?} ptr_w={:x} chr={:x} len={} first={:02X?}", &rs[..rs.len().min(40)], n.ppu.chr_writable as usize, n.chr.as_ptr() as usize, n.chr.len(), &n.chr[..16]);
+                eprintln!("VRAMnz ranges: {:?}", &rs2[..rs2.len().min(20)]);
+                for r in 0..8u16 {
+                    eprintln!("nt row {}: {:?}", r, (0..32).map(|c| n.ppu.vram[(r * 32 + c) as usize]).collect::<Vec<_>>());
+                }
+                eprintln!("attr: {:?}", &n.ppu.vram[0x3C0..0x3D0]);
+                for a in [0x0u16,0x80,0x90,0x100,0x200] { eprintln!("chr {:04X}: {:02X?}", a, (0..16).map(|k| n.chr[(a as usize)+k]).collect::<Vec<_>>()); }
+            }
+            if dump_pram {
+                let pr = &n.mapper.prg_ram;
+                let mut s = String::new();
+                let mut i = 0;
+                while i < pr.len() {
+                    if pr[i] == 0 {
+                        i += 1;
+                        continue;
+                    }
+                    let st = i;
+                    while i < pr.len() && pr[i] != 0 {
+                        i += 1;
+                    }
+                    s.push_str(&String::from_utf8_lossy(&pr[st..i]));
+                    s.push('\n');
+                }
+                eprintln!("PRAM:\n{}", s);
+            }
             let mut wav = Vec::new();
             wav.extend_from_slice(b"RIFF");
             let nsamp = n.audio.len() as u32 * 2;
@@ -80,19 +140,6 @@ fn main() {
                 wav.extend_from_slice(&s.to_le_bytes());
             }
             std::fs::write(format!("{}/audio.wav", outdir), &wav).unwrap();
-        }
-        if env::var("PRAM").is_ok() && f + 1 == frames {
-            let pr = &n.mapper.prg_ram;
-            let mut s = String::new();
-            let mut i = 0;
-            while i < pr.len() {
-                if pr[i] == 0 { i += 1; continue; }
-                let st = i;
-                while i < pr.len() && pr[i] != 0 { i += 1; }
-                s.push_str(&String::from_utf8_lossy(&pr[st..i]));
-                s.push('\n');
-            }
-            eprintln!("PRAM:\n{}", s);
         }
         if tracing {
             eprintln!(

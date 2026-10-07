@@ -313,60 +313,70 @@ impl Mapper {
         }
     }
 
-    /// Fill the PPU's 1 KiB CHR bank table.
+    /// Fill the PPU's 1 KiB CHR page table. Entry i is the 1 KiB page of CHR
+    /// memory that PPU addresses $i*0x400..$i*0x400+$3FF map to.
     pub fn chr_banks(&self, out: &mut [u8; 8]) {
+        let pages = (self.chr_ram_len() / 0x400).max(1) as u8;
         match self.kind {
             1 => {
                 if self.ctrl & 0x10 == 0 {
-                    // 8 KiB mode
-                    let b = (self.chr0 & 0x1F) as u8;
+                    // 8 KiB mode: chr0 selects the whole 8 KiB
+                    let b = (self.chr0 & 0x1F) as u16;
                     for i in 0..8 {
-                        out[i] = b;
+                        out[i] = (b * 8 + i as u16).wrapping_rem(pages as u16) as u8;
                     }
                 } else {
-                    let b0 = (self.chr0 & 0x1F) as u8;
-                    let b1 = (self.chr1 & 0x1F) as u8;
+                    let b0 = (self.chr0 & 0x1F) as u16;
+                    let b1 = (self.chr1 & 0x1F) as u16;
                     for i in 0..4 {
-                        out[i] = b0;
+                        out[i] = (((b0 & 0x0F) * 4 + i as u16) % pages as u16) as u8;
                     }
-                    for i in 4..8 {
-                        out[i] = b1;
+                    for i in 0..4 {
+                        out[4 + i] = (((b1 & 0x0F) * 4 + i as u16) % pages as u16) as u8;
                     }
                 }
             }
             3 => {
-                let b = (self.cn_bank & 3) as u8;
+                let b = (self.cn_bank & 3) as u16;
                 for i in 0..8 {
-                    out[i] = b;
+                    out[i] = (b * 8 + i as u16).wrapping_rem(pages as u16) as u8;
                 }
             }
             4 => {
-                let r = (self.mmc3_bank & 7) as u8;
+                let r = (self.mmc3_bank & 7) as u16;
                 if self.mmc3_bank & 0x80 == 0 {
-                    out[0] = r & !1;
-                    out[1] = r & !1;
-                    out[2] = (r >> 1) & 1;
-                    out[3] = (r >> 1) & 1;
-                    out[4] = (r >> 2) & 1;
-                    out[5] = (r >> 2) & 1;
-                    out[6] = (r >> 3) & 1;
-                    out[7] = (r >> 3) & 1;
+                    out[0] = ((r & !1) * 2) as u8;
+                    out[1] = out[0] + 1;
+                    out[2] = ((r >> 1) & 1) as u8;
+                    out[3] = out[2];
+                    out[4] = ((r >> 2) & 1) as u8;
+                    out[5] = out[4];
+                    out[6] = ((r >> 3) & 1) as u8;
+                    out[7] = out[6];
                 } else {
-                    out[0] = (r >> 1) & 1;
-                    out[1] = (r >> 1) & 1;
-                    out[2] = (r >> 3) & 1;
-                    out[3] = (r >> 3) & 1;
-                    out[4] = r & !1;
-                    out[5] = r & !1;
-                    out[6] = r;
-                    out[7] = r;
+                    out[0] = ((r >> 1) & 1) as u8;
+                    out[1] = out[0];
+                    out[2] = ((r >> 3) & 1) as u8;
+                    out[3] = out[2];
+                    out[4] = (r & !1) as u8;
+                    out[5] = out[4];
+                    out[6] = r as u8;
+                    out[7] = out[6];
                 }
             }
             _ => {
                 for i in 0..8 {
-                    out[i] = 0;
+                    out[i] = (i as u16).wrapping_rem(pages as u16) as u8;
                 }
             }
+        }
+    }
+
+    pub fn chr_ram_len(&self) -> usize {
+        if self.chr.is_empty() {
+            8192
+        } else {
+            self.chr.len()
         }
     }
 

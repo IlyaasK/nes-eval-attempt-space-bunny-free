@@ -168,6 +168,7 @@ impl Ppu {
         let a = (addr & 0x1FFF) as usize;
         let bank = self.chr_banks[a >> 10] as usize;
         let off = bank * 0x400 + (a & 0x3FF);
+        if self.trace2 && off < 0x200 { println!("CHRW {:04X} -> {:04X} <- {:02X}", addr, off, v); }
         if self.chr_len != 0 {
             unsafe {
                 *self.chr_writable.add(off % self.chr_len) = v;
@@ -367,6 +368,13 @@ impl Ppu {
     }
 
     #[inline]
+    fn bg_pattern_addr(&self) -> u16 {
+        let base = if self.ctrl & 0x10 != 0 { 0x1000u16 } else { 0 };
+        let row = (((self.v >> 5) & 1) << 3) | ((self.v >> 12) & 7);
+        (base + (self.nt_byte as u16) * 16 + row) & 0x3FFF
+    }
+
+    #[inline]
     fn sprite_height(&self) -> i32 {
         if self.ctrl & 0x20 != 0 {
             16
@@ -398,34 +406,24 @@ impl Ppu {
 
         if rendering {
             // ---- background fetch pipeline ----
-            match dot {
+            match dot % 8 {
                 1 => {
                     self.nt_byte = self.ppu_read(0x2000 | (self.v & 0x0FFF));
                 }
                 3 => {
                     self.at_byte = self.ppu_read(
-                        0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07),
+                        0x23C0 | (self.v & 0x0C00) | ((self.v & 0x1C) << 1) | ((self.v >> 6) & 0x06),
                     );
                     let quad = ((self.v >> 4) & 4) | (self.v & 2);
                     let val = (self.at_byte >> quad) & 3;
                     self.at_bits = (val & 1) | ((val >> 1) & 1) << 1;
                 }
                 5 => {
-                    let base = if self.ctrl & 0x10 != 0 { 0x1000 } else { 0 };
-                    let fine_y = (self.v >> 12) & 7;
-                    let addr = base
-                        + (self.nt_byte as u16) * 16
-                        + fine_y
-                        + if fine_y >= 8 { 8 } else { 0 };
-                    self.bg_lo_latch = self.ppu_read(addr & 0x3FFF);
+                    let addr = self.bg_pattern_addr();
+                    self.bg_lo_latch = self.ppu_read(addr);
                 }
                 7 => {
-                    let base = if self.ctrl & 0x10 != 0 { 0x1000 } else { 0 };
-                    let fine_y = (self.v >> 12) & 7;
-                    let addr = base
-                        + (self.nt_byte as u16) * 16
-                        + fine_y
-                        + if fine_y >= 8 { 8 } else { 0 };
+                    let addr = self.bg_pattern_addr();
                     self.bg_hi_latch = self.ppu_read((addr + 8) & 0x3FFF);
                     let k = ((dc / 8) & 1) as usize;
                     self.bank[k] = [self.at_bits, self.bg_lo_latch, self.bg_hi_latch];
