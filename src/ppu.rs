@@ -51,6 +51,7 @@ pub struct Ppu {
     pub framebuffer: Vec<u16>,
     pub mirroring: u8, // 0=horiz, 1=vert, 2=single0, 3=single1
     pub warmup: i64,
+    pub trace2: bool,
     pub chr_banks: [u8; 8],
     pub nt_bank: u8,
     pub chr_ptr: *const u8,
@@ -105,6 +106,7 @@ impl Ppu {
             framebuffer: vec![0; 256 * 240],
             mirroring: MIRROR_HORIZ,
             warmup: 29658,
+            trace2: false,
             chr_banks: [0; 8],
             nt_bank: 0,
             chr_ptr: core::ptr::null(),
@@ -205,6 +207,7 @@ impl Ppu {
 
     pub fn ppu_write(&mut self, addr: u16, v: u8) {
         let addr = addr & 0x3FFF;
+        if self.trace2 && addr >= 0x3F00 { println!("PALW {:04X} <- {:02X}", addr, v); }
         if addr >= 0x3F00 {
             self.palette_write((addr & 0x1F) as usize, v);
         } else if addr < 0x2000 {
@@ -216,9 +219,12 @@ impl Ppu {
     }
 
     pub fn cpu_read(&mut self, addr: u16) -> u8 {
-        let a = addr & 0x3FFF;
+        let a = addr & 7;
         match a {
-            0x2002 => {
+            0x02 => {
+                if self.trace2 {
+                    println!("R2002 status={:02X} sl={} dot={} cyc={}", self.status, self.scanline, self.dot, self.dc);
+                }
                 let r = (self.status & 0xE0) | (self.open_bus & 0x1F);
                 self.status &= !0x80;
                 self.nmi_latch = false;
@@ -227,12 +233,12 @@ impl Ppu {
                 self.open_bus = r;
                 r
             }
-            0x2004 => {
+            0x04 => {
                 let r = self.oam[self.oamaddr as usize];
                 self.open_bus = r;
                 r
             }
-            0x2007 => {
+            0x07 => {
                 let addr = self.v & 0x3FFF;
                 let mut r = self.read_buffer;
                 if addr >= 0x3F00 {
@@ -264,8 +270,9 @@ impl Ppu {
             return;
         }
         self.open_bus = val;
-        match a {
-            0x2000 => {
+        match addr & 7 {
+            0x0000 => {
+                if self.trace2 { println!("SET ctrl {:02X} (was {:02X}) at cyc", val, self.ctrl); }
                 self.ctrl = val;
                 self.t = (self.t & 0xF3FF) | ((val as u16 & 3) << 10);
                 if val & 0x80 == 0 {
@@ -273,9 +280,9 @@ impl Ppu {
                 }
                 self.update_nmi();
             }
-            0x2001 => self.mask = val,
-            0x2003 => self.oamaddr = val,
-            0x2004 => {
+            0x01 => self.mask = val,
+            0x03 => self.oamaddr = val,
+            0x04 => {
                 self.oam[self.oamaddr as usize] = val;
                 if self.ctrl & 0x02 != 0 {
                     self.oamaddr = self.oamaddr.wrapping_add(1);
@@ -283,7 +290,7 @@ impl Ppu {
                     self.oamaddr = self.oamaddr.wrapping_add(4);
                 }
             }
-            0x2005 => {
+            0x05 => {
                 if !self.write_toggle {
                     self.t = (self.t & 0x7FE0) | ((val >> 3) as u16);
                     self.fine_x = val & 7;
@@ -295,7 +302,7 @@ impl Ppu {
                 }
                 self.write_toggle = !self.write_toggle;
             }
-            0x2006 => {
+            0x06 => {
                 if !self.write_toggle {
                     self.t = (self.t & 0x00FF) | ((val as u16 & 0x3F) << 8);
                 } else {
@@ -304,13 +311,19 @@ impl Ppu {
                 }
                 self.write_toggle = !self.write_toggle;
             }
-            0x2007 => {
+            0x07 => {
                 let addr = self.v & 0x3FFF;
+                if self.trace2 { println!("W2007 v={:04X} <- {:02X}", addr, val); }
                 self.ppu_write(addr, val);
                 self.increment_v();
             }
             _ => {}
         }
+    }
+
+    pub fn clear_nmi_latch(&mut self) {
+        self.nmi_latch = false;
+        self.update_nmi();
     }
 
     fn update_nmi(&mut self) {
@@ -375,6 +388,7 @@ impl Ppu {
         }
 
         if sl == 241 && dot == 1 {
+            if self.trace2 { println!("VB241 ctrl={:02X} latch={} out={}", self.ctrl, self.nmi_latch, self.nmi_output); }
             self.status |= 0x80;
             if (self.ctrl & 0x80) != 0 {
                 self.nmi_latch = true;

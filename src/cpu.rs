@@ -106,18 +106,18 @@ impl Nes {
     fn addr_ind_x(&mut self) -> u16 {
         let b = self.fetch();
         self.tick();
-        let p = b.wrapping_add(self.x) as u16;
-        let lo = self.fetch() as u16;
-        self.tick();
-        let hi = self.fetch() as u16;
+        let p = (b.wrapping_add(self.x) & 0xFF) as u16;
+        let lo = self.read(p) as u16;
+        let hi = self.read((p + 1) & 0xFF) as u16;
         lo | (hi << 8)
     }
 
     fn addr_ind_y(&mut self, rmw: bool) -> u16 {
-        let p = self.fetch() as u16;
+        let b = self.fetch();
         self.tick();
-        let lo = self.fetch() as u16;
-        let hi = self.fetch() as u16;
+        let p = b as u16;
+        let lo = self.read(p) as u16;
+        let hi = self.read((p + 1) & 0xFF) as u16;
         let base = lo | (hi << 8);
         let a = base.wrapping_add(self.y as u16);
         if (a & 0xFF00) != (base & 0xFF00) || rmw {
@@ -157,6 +157,7 @@ impl Nes {
         }
         if self.nmi_pending {
             self.nmi_pending = false;
+            self.ppu.clear_nmi_latch();
             self.interrupt_nmi();
             return;
         }
@@ -962,6 +963,7 @@ impl Nes {
             }
             0x20 => {
                 let t = self.addr_abs();
+                if self.trace { println!("JSR push {:04X} -> {:04X}", self.pc, t); }
                 self.push((self.pc >> 8) as u8);
                 self.push((self.pc & 0xFF) as u8);
                 self.pc = t;
@@ -970,14 +972,14 @@ impl Nes {
                 self.tick();
                 let lo = self.pull() as u16;
                 let hi = self.pull() as u16;
+                if self.trace { println!("RTS -> {:04X}", lo | (hi << 8)); }
                 self.pc = lo | (hi << 8);
                 self.tick();
-                let a = self.read(self.pc);
-                self.pc = self.pc.wrapping_add(1);
+                self.read(self.pc);
             }
             0x40 => {
                 self.tick();
-                self.pull();
+                self.tick();
                 let p = self.pull();
                 self.set_p(p);
                 let lo = self.pull() as u16;
@@ -1064,6 +1066,7 @@ impl Nes {
     }
 
     fn interrupt_nmi(&mut self) {
+        if self.trace { println!("NMI at pc={:04X} sl={} dot={}", self.pc, self.ppu.scanline, self.ppu.dot); }
         self.read(self.pc);
         self.tick();
         self.read(self.pc);
@@ -1074,6 +1077,7 @@ impl Nes {
         self.i = true;
         let lo = self.read(0xFFFA) as u16;
         let hi = self.read(0xFFFB) as u16;
+        if self.trace { println!("  -> NMI vector {:04X}", lo|hi<<8); }
         self.pc = lo | (hi << 8);
     }
 

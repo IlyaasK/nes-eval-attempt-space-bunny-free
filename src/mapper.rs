@@ -92,92 +92,97 @@ impl Mapper {
 
     #[inline]
     pub fn prg_read(&self, addr: u16) -> u8 {
-        let n = self.n8k();
+        let n = self.n8k().max(1);
         let a = addr & 0x7FFF;
-        match self.kind {
-            0 => {
-                let banks = if n >= 2 { 2 } else { 1 };
-                let b = (a / 0x2000) as usize % banks;
-                self.prg_rom[(b * 0x2000 + (a % 0x2000) as usize) % self.prg_rom.len()]
+        let (b, off) = match self.kind {
+            0 | 3 => {
+                let banks16 = (n / 2).max(1);
+                let bk = ((a / 0x4000) as usize) % banks16;
+                (bk, a & 0x3FFF)
             }
             1 => {
                 let mode = self.ctrl & 3;
                 let bank = (self.prg_reg & 0x0F) as usize;
-                let (b, off) = if n >= 2 {
+                if n < 2 {
+                    (0, a & 0x3FFF)
+                } else {
                     match mode {
                         0 | 1 => {
-                            let bb = (bank & !1) as usize;
-                            let bk = if a < 0x4000 { bb } else { bb + 1 };
-                            (bk, a & 0x3FFF)
+                            let bb = (bank & !1) % (n / 2).max(1);
+                            if a < 0x4000 {
+                                (bb, a & 0x3FFF)
+                            } else {
+                                ((bb + 1) % (n / 2).max(1), a & 0x3FFF)
+                            }
                         }
                         2 => {
                             if a < 0x4000 {
                                 (0, a & 0x3FFF)
                             } else {
-                                ((bank % n.max(1)) as usize, a & 0x3FFF)
+                                ((bank / 2) % (n / 2).max(1), a & 0x3FFF)
                             }
                         }
                         _ => {
                             if a < 0x4000 {
-                                ((n - 1) as usize, a & 0x3FFF)
+                                ((n / 2).max(1) - 1, a & 0x3FFF)
                             } else {
-                                ((bank % n.max(1)) as usize, a & 0x3FFF)
+                                ((bank / 2) % (n / 2).max(1), a & 0x3FFF)
                             }
                         }
                     }
-                } else {
-                    (0, a & 0x3FFF)
-                };
-                let idx = (b * 0x4000 + off as usize) % self.prg_rom.len();
-                self.prg_rom[idx]
+                }
             }
             2 => {
-                let b = if a < 0x4000 {
-                    (self.ux_bank as usize) % (n.max(1) / 2).max(1)
+                let banks16 = (n / 2).max(1);
+                if a < 0x4000 {
+                    ((self.ux_bank as usize) % banks16, a & 0x3FFF)
                 } else {
-                    n.saturating_sub(2) / 2
-                };
-                let idx = (b * 0x4000 + (a & 0x3FFF) as usize) % self.prg_rom.len();
-                self.prg_rom[idx]
-            }
-            3 => {
-                let banks = if n >= 2 { 2 } else { 1 };
-                let b = (a / 0x2000) as usize % banks;
-                self.prg_rom[(b * 0x2000 + (a % 0x2000) as usize) % self.prg_rom.len()]
+                    (banks16 - 1, a & 0x3FFF)
+                }
             }
             4 => {
                 let mode = (self.mmc3_bank >> 6) & 3;
                 let r = (self.mmc3_bank & 7) as usize;
-                let (b, off) = match mode {
-                    0 | 1 => {
+                match mode {
+                    0 => {
                         if a < 0x4000 {
-                            (((r & !1) % n.max(1)) as usize, a & 0x3FFF)
-                        } else if mode == 0 {
-                            (((r | 1) % n.max(1)) as usize, a & 0x3FFF)
+                            ((r & !1) % n, a & 0x1FFF)
                         } else {
-                            ((n.saturating_sub(1)) as usize, a & 0x3FFF)
+                            (((r | 1) % n) as usize, a & 0x1FFF)
+                        }
+                    }
+                    1 => {
+                        if a < 0x4000 {
+                            ((r & !1) % n, a & 0x1FFF)
+                        } else {
+                            (n - 1, a & 0x1FFF)
                         }
                     }
                     _ => {
                         if a < 0x2000 {
-                            ((n.saturating_sub(2)) as usize, a & 0x1FFF)
+                            (n - 2, a & 0x1FFF)
                         } else if a < 0x4000 {
-                            ((((r | 2) % n.max(1)) as usize), a & 0x1FFF)
+                            (((r | 2) % n) as usize, a & 0x1FFF)
                         } else if a < 0x6000 {
-                            ((n.saturating_sub(1)) as usize, a & 0x1FFF)
+                            (n - 1, a & 0x1FFF)
                         } else {
-                            (((r | 1) % n.max(1)) as usize, a & 0x1FFF)
+                            (((r | 1) % n) as usize, a & 0x1FFF)
                         }
                     }
-                };
-                let idx = (b * 0x2000 + off as usize) % self.prg_rom.len();
-                self.prg_rom[idx]
+                }
             }
             _ => {
-                let idx = (a as usize) % self.prg_rom.len();
-                self.prg_rom[idx]
+                let bk = ((a / 0x4000) as usize) % (n / 2).max(1);
+                (bk, a & 0x3FFF)
             }
-        }
+        };
+        let wide = !matches!(self.kind, 4);
+        let idx = if wide {
+            (b * 0x4000 + off as usize) % self.prg_rom.len().max(1)
+        } else {
+            (b * 0x2000 + (off & 0x1FFF) as usize) % self.prg_rom.len().max(1)
+        };
+        self.prg_rom[idx]
     }
 
     pub fn prg_write(&mut self, addr: u16, v: u8) {

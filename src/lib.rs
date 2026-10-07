@@ -248,6 +248,7 @@ impl Nes {
         }
         if self.ppu.nmi_output && !self.nmi_pending {
             self.nmi_pending = true;
+            if self.trace { println!("  nmi_output set ctrl={:02X} latch={} cyc={}", self.ppu.ctrl, self.ppu.nmi_latch, self.cycles); }
         }
         self.irq_line = self.apu.irq_line || self.mapper.irq_pending;
         self.audio_tick();
@@ -311,6 +312,9 @@ impl Nes {
 
     #[inline]
     pub fn write_raw(&mut self, a: u16, v: u8) {
+        if self.trace {
+            println!("W {:04X} <- {:02X}", a, v);
+        }
         match a & 0xFFFF {
             0x0000..=0x1FFF => {
                 self.ram[(a & 0x7FF) as usize] = v;
