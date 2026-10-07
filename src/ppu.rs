@@ -52,6 +52,7 @@ pub struct Ppu {
     pub mirroring: u8, // 0=horiz, 1=vert, 2=single0, 3=single1
     pub warmup: i64,
     pub trace2: bool,
+    pub trace_sl: u16,
     pub chr_banks: [u8; 8],
     pub nt_bank: u8,
     pub chr_ptr: *const u8,
@@ -107,6 +108,7 @@ impl Ppu {
             mirroring: MIRROR_HORIZ,
             warmup: 29658,
             trace2: false,
+            trace_sl: 0,
             chr_banks: [0; 8],
             nt_bank: 0,
             chr_ptr: core::ptr::null(),
@@ -139,11 +141,13 @@ impl Ppu {
     fn mirror_vram(&self, addr: u16) -> usize {
         let a = addr & 0x0FFF;
         let off = (a & 0x3FF) as usize;
-        let table = match self.mirroring {
-            MIRROR_HORIZ => ((((a >> 11) & 1) | ((((a >> 10) & 1) ^ ((self.nt_bank & 1) as u16)) << 1)) & 1) as usize,
-            MIRROR_VERT => (((((a >> 10) & 1) ^ ((self.nt_bank & 1) as u16)) & 1) << 1) as usize,
-            2 => (((self.nt_bank & 1) as usize) << 1) & 3,
-            _ => ((((self.nt_bank & 1) as usize) << 1) | 1) & 3,
+        let horiz = ((a >> 10) & 1) ^ ((self.nt_bank & 1) as u16);
+        let vert = ((a >> 11) & 1) ^ ((self.nt_bank & 1) as u16);
+        let table: usize = match self.mirroring {
+            MIRROR_HORIZ => (vert & 1) as usize,
+            MIRROR_VERT => (horiz & 1) as usize,
+            2 => ((self.nt_bank & 1) as usize) << 1,
+            _ => (((self.nt_bank & 1) as usize) << 1) | 1,
         };
         (table << 10) | off
     }
@@ -314,7 +318,7 @@ impl Ppu {
             }
             0x07 => {
                 let addr = self.v & 0x3FFF;
-                if self.trace2 { println!("W2007 v={:04X} <- {:02X}", addr, val); }
+                if self.trace2 { println!("W2007 v={:04X} <- {:02X} ctrl={:02X} mask={:02X} w={}", addr, val, self.ctrl, self.mask, self.write_toggle as u8); }
                 self.ppu_write(addr, val);
                 self.increment_v();
             }
@@ -424,6 +428,9 @@ impl Ppu {
                 }
                 7 => {
                     let addr = self.bg_pattern_addr();
+                    if self.trace2 && self.trace_sl == sl {
+                        println!("S{} d{} v={:04X} nt={:02X} addr={:04X} lo={:02X} k={} kk={} finex={}", sl, dot, self.v, self.nt_byte, addr, self.bg_lo_latch, ((dc/8)&1), (((dc.wrapping_sub(8))/8)&1), self.fine_x);
+                    }
                     self.bg_hi_latch = self.ppu_read((addr + 8) & 0x3FFF);
                     let k = ((dc / 8) & 1) as usize;
                     self.bank[k] = [self.at_bits, self.bg_lo_latch, self.bg_hi_latch];

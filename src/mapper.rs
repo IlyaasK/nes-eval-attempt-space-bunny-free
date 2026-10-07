@@ -26,12 +26,14 @@ pub struct Mapper {
 
     // mapper 4
     pub mmc3_bank: u8,
+    pub mmc3_r: [u8; 8],
     pub mmc3_ram: u8,
     pub irq_latch: u8,
     pub irq_counter: u8,
     pub irq_reload: bool,
     pub irq_inhibit: bool,
     pub irq_pending: bool,
+    pub irq_enabled: bool,
 }
 
 impl Mapper {
@@ -54,12 +56,14 @@ impl Mapper {
             ux_bank: 0,
             cn_bank: 0,
             mmc3_bank: 0,
+            mmc3_r: [0; 8],
             mmc3_ram: 0,
             irq_latch: 0,
             irq_counter: 0,
             irq_reload: false,
             irq_inhibit: false,
             irq_pending: false,
+            irq_enabled: false,
         }
     }
 
@@ -82,12 +86,14 @@ impl Mapper {
         self.ux_bank = 0;
         self.cn_bank = 0;
         self.mmc3_bank = 0;
+        self.mmc3_r = [0; 8];
         self.mmc3_ram = 0;
         self.irq_latch = 0;
         self.irq_counter = 0;
         self.irq_reload = false;
         self.irq_inhibit = false;
         self.irq_pending = false;
+        self.irq_enabled = false;
     }
 
     #[inline]
@@ -141,35 +147,27 @@ impl Mapper {
                 }
             }
             4 => {
-                let mode = (self.mmc3_bank >> 6) & 3;
-                let r = (self.mmc3_bank & 7) as usize;
-                match mode {
-                    0 => {
-                        if a < 0x4000 {
-                            ((r & !1) % n, a & 0x1FFF)
-                        } else {
-                            (((r | 1) % n) as usize, a & 0x1FFF)
-                        }
+                let mode = (self.mmc3_bank >> 6) & 1;
+                let r6 = (self.mmc3_r[6] & 0x3F) as usize % n.max(1);
+                let r7 = (self.mmc3_r[7] & 0x3F) as usize % n.max(1);
+                let (b, off) = if a < 0x2000 {
+                    if mode == 0 {
+                        (r6, a & 0x1FFF)
+                    } else {
+                        (n.saturating_sub(2), a & 0x1FFF)
                     }
-                    1 => {
-                        if a < 0x4000 {
-                            ((r & !1) % n, a & 0x1FFF)
-                        } else {
-                            (n - 1, a & 0x1FFF)
-                        }
+                } else if a < 0x4000 {
+                    (r7, a & 0x1FFF)
+                } else if a < 0x6000 {
+                    if mode == 0 {
+                        (n.saturating_sub(2), a & 0x1FFF)
+                    } else {
+                        (r6, a & 0x1FFF)
                     }
-                    _ => {
-                        if a < 0x2000 {
-                            (n - 2, a & 0x1FFF)
-                        } else if a < 0x4000 {
-                            (((r | 2) % n) as usize, a & 0x1FFF)
-                        } else if a < 0x6000 {
-                            (n - 1, a & 0x1FFF)
-                        } else {
-                            (((r | 1) % n) as usize, a & 0x1FFF)
-                        }
-                    }
-                }
+                } else {
+                    (n.saturating_sub(1), a & 0x1FFF)
+                };
+                (b, off)
             }
             _ => {
                 let bk = ((a / 0x4000) as usize) % (n / 2).max(1);
@@ -269,30 +267,37 @@ impl Mapper {
     }
 
     fn mmc3_write(&mut self, a: u16, v: u8) {
-        let r = (a >> 13) & 3;
-        match r {
+        match (a >> 13) & 3 {
             0 => {
-                self.mmc3_bank = v;
-                if v & 0x80 != 0 {
-                    self.irq_reload = true;
+                if a & 1 == 0 {
+                    self.mmc3_bank = v;
+                } else {
+                    let idx = (self.mmc3_bank & 7) as usize;
+                    self.mmc3_r[idx] = v;
                 }
             }
             1 => {
-                self.mmc3_bank = (self.mmc3_bank & !7) | (v & 7);
-                self.irq_latch = v;
-            }
-            2 => {
                 self.mmc3_ram = v;
             }
-            _ => {
-                if a & 0x0001 == 0 {
-                    self.irq_inhibit = false;
-                    self.irq_reload = false;
+            2 => {
+                if a & 1 == 0 {
+                    self.irq_latch = v;
                 } else {
                     self.irq_counter = 0;
                     self.irq_pending = false;
                     self.irq_reload = true;
-                    self.irq_inhibit = true;
+                }
+            }
+            _ => {
+                if a & 1 == 0 {
+                    self.irq_inhibit = v & 0x80 != 0;
+                    self.irq_reload = false;
+                    if self.irq_inhibit {
+                        self.irq_pending = false;
+                    }
+                    self.irq_enabled = false;
+                } else {
+                    self.irq_enabled = true;
                 }
             }
         }
@@ -308,7 +313,7 @@ impl Mapper {
         } else {
             self.irq_counter -= 1;
         }
-        if self.irq_counter == 0 {
+        if self.irq_counter == 0 && !self.irq_inhibit {
             self.irq_pending = true;
         }
     }
@@ -343,25 +348,30 @@ impl Mapper {
                 }
             }
             4 => {
-                let r = (self.mmc3_bank & 7) as u16;
+                let r = &self.mmc3_r;
+                let r0 = (r[0] & 0xFE) as u8;
+                let r1 = (r[1] & 0xFE) as u8;
                 if self.mmc3_bank & 0x80 == 0 {
-                    out[0] = ((r & !1) * 2) as u8;
-                    out[1] = out[0] + 1;
-                    out[2] = ((r >> 1) & 1) as u8;
-                    out[3] = out[2];
-                    out[4] = ((r >> 2) & 1) as u8;
-                    out[5] = out[4];
-                    out[6] = ((r >> 3) & 1) as u8;
-                    out[7] = out[6];
+                    out[0] = r0;
+                    out[1] = r0;
+                    out[2] = r1;
+                    out[3] = r1;
+                    out[4] = r[2];
+                    out[5] = r[3];
+                    out[6] = r[4];
+                    out[7] = r[5];
                 } else {
-                    out[0] = ((r >> 1) & 1) as u8;
-                    out[1] = out[0];
-                    out[2] = ((r >> 3) & 1) as u8;
-                    out[3] = out[2];
-                    out[4] = (r & !1) as u8;
-                    out[5] = out[4];
-                    out[6] = r as u8;
-                    out[7] = out[6];
+                    out[0] = r[2];
+                    out[1] = r[3];
+                    out[2] = r[4];
+                    out[3] = r[5];
+                    out[4] = r1;
+                    out[5] = r1;
+                    out[6] = r0;
+                    out[7] = r0;
+                }
+                for i in 0..8 {
+                    out[i] = (out[i] as u16).wrapping_rem(pages as u16) as u8;
                 }
             }
             _ => {

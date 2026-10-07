@@ -31,6 +31,9 @@ fn main() {
     std::fs::create_dir_all(outdir).unwrap();
 
     let mut n = Nes::new();
+    if let Ok(v) = env::var("SCALE") { n.apu.out_scale = v.parse().unwrap(); }
+    if env::var("APUD").is_ok() { n.ppu.trace2 = false; }
+    if let Ok(v) = env::var("HP") { n.apu.hp_coeff = v.parse().unwrap(); }
     if !n.load_rom(&data) {
         eprintln!("load failed");
         std::process::exit(1);
@@ -50,7 +53,12 @@ fn main() {
         n.keys = keys;
         n.trace = tracing && f >= first_trace;
         n.ppu.trace2 = n.trace;
+        n.ppu.trace_sl = env::var("SL").ok().and_then(|v| v.parse().ok()).unwrap_or(32);
         n.run_frame();
+        if env::var("APUD").is_ok() {
+            eprintln!("f{} mixer={:.4} p0len={} p0per={} p0vol={} p0duty={} p1len={} trlen={} nzlen={} dmcout={}",
+                f, n.apu.mixer(), n.apu.pulse[0].length, n.apu.pulse[0].period, n.apu.pulse[0].volume, n.apu.pulse[0].duty, n.apu.pulse[1].length, n.apu.triangle.length, n.apu.noise.length, 0);
+        }
         n.trace = false;
         n.ppu.trace2 = false;
 
@@ -98,11 +106,11 @@ fn main() {
                 );
                 eprintln!("CHRnz ranges: {:?} ptr_w={:x} chr={:x} len={} first={:02X?}", &rs[..rs.len().min(40)], n.ppu.chr_writable as usize, n.chr.as_ptr() as usize, n.chr.len(), &n.chr[..16]);
                 eprintln!("VRAMnz ranges: {:?}", &rs2[..rs2.len().min(20)]);
-                for r in 0..8u16 {
+                for r in 0..30u16 {
                     eprintln!("nt row {}: {:?}", r, (0..32).map(|c| n.ppu.vram[(r * 32 + c) as usize]).collect::<Vec<_>>());
                 }
                 eprintln!("attr: {:?}", &n.ppu.vram[0x3C0..0x3D0]);
-                for a in [0x0u16,0x80,0x90,0x100,0x200] { eprintln!("chr {:04X}: {:02X?}", a, (0..16).map(|k| n.chr[(a as usize)+k]).collect::<Vec<_>>()); }
+                for a in [0x530u16,0x410,0x220] { eprintln!("chr {:04X}: {:02X?}", a, (0..16).map(|k| n.chr[(a as usize)+k]).collect::<Vec<_>>()); }
             }
             if dump_pram {
                 let pr = &n.mapper.prg_ram;
@@ -123,8 +131,9 @@ fn main() {
                 eprintln!("PRAM:\n{}", s);
             }
             let mut wav = Vec::new();
+            let all: Vec<i16> = n.audio_all.clone();
             wav.extend_from_slice(b"RIFF");
-            let nsamp = n.audio.len() as u32 * 2;
+            let nsamp = all.len() as u32 * 2;
             wav.extend_from_slice(&(36 + nsamp).to_le_bytes());
             wav.extend_from_slice(b"WAVEfmt ");
             wav.extend_from_slice(&16u32.to_le_bytes());
@@ -136,7 +145,7 @@ fn main() {
             wav.extend_from_slice(&16u16.to_le_bytes());
             wav.extend_from_slice(b"data");
             wav.extend_from_slice(&nsamp.to_le_bytes());
-            for s in n.audio.iter() {
+            for s in all.iter() {
                 wav.extend_from_slice(&s.to_le_bytes());
             }
             std::fs::write(format!("{}/audio.wav", outdir), &wav).unwrap();

@@ -40,6 +40,7 @@ pub struct Nes {
     pub open_bus: u8,
 
     pub audio: Vec<i16>,
+    pub audio_all: Vec<i16>,
     pub audio_read: usize,
     pub res_acc: f64,
     pub hp_prev: f64,
@@ -76,6 +77,7 @@ impl Nes {
             dma_page: 0,
             open_bus: 0,
             audio: Vec::new(),
+            audio_all: Vec::new(),
             audio_read: 0,
             res_acc: 0.0,
             hp_prev: 0.0,
@@ -143,7 +145,7 @@ impl Nes {
         }
 
         let mut pram = prg_ram_size;
-        if mapper_num == 1 || mapper_num == 4 {
+        if mapper_num == 1 || mapper_num == 4 || battery {
             if pram < 8192 {
                 pram = 8192;
             }
@@ -239,7 +241,7 @@ impl Nes {
         self.ppu.tick();
         self.ppu.tick();
         self.ppu.tick();
-        if self.mapper.kind == 4 && self.ppu.scanline == 261 && self.ppu.dot == 260 {
+        if self.mapper.kind == 4 && self.ppu.dot == 260 && self.ppu.scanline <= 240 {
             self.mapper.clock_irq();
         }
         self.apu.tick();
@@ -275,6 +277,7 @@ impl Nes {
                 v
             };
             self.audio.push(v as i16);
+            self.audio_all.push(v as i16);
         }
     }
 
@@ -375,6 +378,11 @@ impl Nes {
     pub fn write(&mut self, a: u16, v: u8) {
         self.write_raw(a, v);
         self.tick();
+    }
+
+    pub fn set_audio_params(&mut self, scale: f64, hp: f64) {
+        self.apu.out_scale = scale;
+        self.apu.hp_coeff = hp;
     }
 
     pub fn run_frame(&mut self) {

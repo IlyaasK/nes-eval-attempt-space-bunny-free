@@ -734,7 +734,7 @@ impl Nes {
             0xC6 => {
                 let a = self.addr_zp();
                 self.rmw(a, |s, v| {
-                    let r = v.wrapping_add(1);
+                    let r = v.wrapping_sub(1);
                     s.set_zn(r);
                     r
                 });
@@ -742,7 +742,7 @@ impl Nes {
             0xD6 => {
                 let a = self.addr_zp_x();
                 self.rmw(a, |s, v| {
-                    let r = v.wrapping_add(1);
+                    let r = v.wrapping_sub(1);
                     s.set_zn(r);
                     r
                 });
@@ -750,7 +750,7 @@ impl Nes {
             0xCE => {
                 let a = self.addr_abs();
                 self.rmw(a, |s, v| {
-                    let r = v.wrapping_add(1);
+                    let r = v.wrapping_sub(1);
                     s.set_zn(r);
                     r
                 });
@@ -758,7 +758,7 @@ impl Nes {
             0xDE => {
                 let a = self.addr_abs_x(true);
                 self.rmw(a, |s, v| {
-                    let r = v.wrapping_add(1);
+                    let r = v.wrapping_sub(1);
                     s.set_zn(r);
                     r
                 });
