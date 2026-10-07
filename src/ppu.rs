@@ -224,7 +224,7 @@ impl Ppu {
 
     pub fn ppu_write(&mut self, addr: u16, v: u8) {
         let addr = addr & 0x3FFF;
-        if self.trace2 && addr >= 0x3F00 { println!("PALW {:04X} <- {:02X}", addr, v); }
+        if self.trace2 && addr >= 0x3F00 { println!("PALW {:04X} <- {:02X} f={}", addr, v, self.frame_count); }
         if addr >= 0x3F00 {
             self.palette_write((addr & 0x1F) as usize, v);
         } else if addr < 0x2000 {
@@ -297,7 +297,7 @@ impl Ppu {
                 }
                 self.update_nmi();
             }
-            0x01 => self.mask = val,
+            0x01 => { if self.trace2 { println!("W2001 {:02X} f={} sl={}", val, self.frame_count, self.scanline); } self.mask = val; }
             0x03 => self.oamaddr = val,
             0x04 => {
                 self.oam[self.oamaddr as usize] = val;
@@ -521,6 +521,7 @@ impl Ppu {
                 self.scanline = 0;
                 self.odd_frame = !self.odd_frame;
                 self.frame_count += 1;
+                if self.trace2 { println!("FRAMEDONE {} sc={} mask={:02X} ctrl={:02X} v={:04X}", self.frame_count, self.sprite_count, self.mask, self.ctrl, self.v); }
             }
         }
     }
