@@ -308,20 +308,19 @@ impl Ppu {
                 }
             }
             0x05 => {
-                if self.trace2 { println!("W2005 w={} v={:02X} t={:04X} v={:04X}", self.write_toggle as u8, val, self.t, self.v); }
+                if self.trace2 { println!("W2005 w={} v={:02X} t={:04X} v={:04X} f={}", self.write_toggle as u8, val, self.t, self.v, self.frame_count); }
                 if !self.write_toggle {
                     self.t = (self.t & 0x7FE0) | ((val >> 3) as u16);
                     self.fine_x = val & 7;
                     self.scroll_x = val;
                 } else {
-                    self.t = (self.t & 0x0C1F) | ((val as u16 & 7) << 12);
-                    self.t = (self.t & 0x731F) | ((val as u16 & 0xF8) << 2);
+                    self.t = (self.t & 0x0C1F) | ((val as u16 & 7) << 12) | ((val as u16 & 0xF8) << 2);
                     self.scroll_y = val;
                 }
                 self.write_toggle = !self.write_toggle;
             }
             0x06 => {
-                if self.trace2 { println!("W2006 w={} v={:02X} t={:04X} v={:04X}", self.write_toggle as u8, val, self.t, self.v); }
+                if self.trace2 { println!("W2006 w={} v={:02X} t={:04X} v={:04X} f={}", self.write_toggle as u8, val, self.t, self.v, self.frame_count); }
                 if !self.write_toggle {
                     self.t = (self.t & 0x00FF) | ((val as u16 & 0x3F) << 8);
                 } else {
@@ -332,7 +331,7 @@ impl Ppu {
             }
             0x07 => {
                 let addr = self.v & 0x3FFF;
-                if self.trace2 { println!("W2007 v={:04X} <- {:02X} ctrl={:02X} mask={:02X} w={} pc={:04X} sl={} dot={}", addr, val, self.ctrl, self.mask, self.write_toggle as u8, self.last_pc, self.scanline, self.dot); }
+                if self.trace2 { println!("W2007 v={:04X} <- {:02X} ctrl={:02X} mask={:02X} w={} pc={:04X} sl={} dot={} f={}", addr, val, self.ctrl, self.mask, self.write_toggle as u8, self.last_pc, self.scanline, self.dot, self.frame_count); }
                 self.ppu_write(addr, val);
                 self.increment_v();
             }
@@ -388,7 +387,7 @@ impl Ppu {
     #[inline]
     fn bg_pattern_addr(&self) -> u16 {
         let base = if self.ctrl & 0x10 != 0 { 0x1000u16 } else { 0 };
-        let row = (((self.v >> 5) & 1) << 3) | ((self.v >> 12) & 7);
+        let row = (self.v >> 12) & 7;
         (base + (self.nt_byte as u16) * 16 + row) & 0x3FFF
     }
 
@@ -422,13 +421,17 @@ impl Ppu {
             self.update_nmi();
         }
 
+        if visible {
+            self.render_pixel(dot as u16 - 1, dc);
+        }
+
         if rendering {
-            if (dot >= 2 && dot <= 257) || (dot >= 321 && dot <= 337) {
-                self.sh_lo <<= 1;
-                self.sh_hi <<= 1;
-                self.sh_at <<= 1;
+            if dot <= 256 || dot >= 321 {
+                self.sh_lo >>= 1;
+                self.sh_hi >>= 1;
+                self.sh_at >>= 1;
             }
-            if dot % 8 == 1 {
+            if (dot <= 256 && dot % 8 == 0) || dot == 333 {
                 self.sh_lo = (self.sh_lo & 0x00FF) | ((self.pend_lo as u16) << 8);
                 self.sh_hi = (self.sh_hi & 0x00FF) | ((self.pend_hi as u16) << 8);
                 self.sh_at = (self.sh_at & 0x00FF) | ((self.pend_at as u16) << 8);
@@ -440,7 +443,7 @@ impl Ppu {
                 }
                 3 => {
                     self.at_byte = self.ppu_read(
-                        0x23C0 | (self.v & 0x0C00) | ((self.v & 0x1C) << 1) | ((self.v >> 6) & 0x06),
+                        0x23C0 | (self.v & 0x0C00) | ((self.v >> 4) & 0x38) | ((self.v >> 2) & 0x07),
                     );
                     let quad = ((self.v >> 4) & 4) | (self.v & 2);
                     let val = (self.at_byte >> quad) & 3;
@@ -508,10 +511,6 @@ impl Ppu {
             self.copy_y();
         }
 
-        if visible {
-            self.render_pixel(dot as u16 - 1, dc);
-        }
-
         // advance
         self.dc = dc + 1;
         self.dot += 1;
@@ -543,7 +542,7 @@ impl Ppu {
         let mut bg_pal: u8 = 0;
         let mut bg_ok = false;
         if rendering && show_bg && x_vis {
-            let bit = ((x & 7) + self.fine_x as u16) & 15;
+            let bit = self.fine_x as u16;
             let lo = ((self.sh_lo >> bit) & 1) as u8;
             let hi = ((self.sh_hi >> bit) & 1) as u8;
             let at = ((self.sh_at >> bit) & 1) as u8;
@@ -613,6 +612,9 @@ impl Ppu {
         if sl < 240 && (x as usize) < 256 {
             let idx = (sl as usize) * 256 + x as usize;
             self.framebuffer[idx] = out;
+            if self.trace2 && self.trace_sl == sl && x < 48 {
+                println!("PX {} {} lo={:04X} hi={:04X} at={:04X} fx={} bgp={} bgo={} idx={} c={:02X} pl={:02X} ph={:02X} nt={:02X}", sl, x, self.sh_lo, self.sh_hi, self.sh_at, self.fine_x, bg_pal, bg_pixel, color_idx, c, self.pend_lo, self.pend_hi, self.nt_byte);
+            }
         }
     }
 
